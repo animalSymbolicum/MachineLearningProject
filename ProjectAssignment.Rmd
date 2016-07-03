@@ -2,7 +2,9 @@
 title: "Predicting the Quality of Barbell Lifts with Accelerometers"
 author: "Majid"
 date: "3rd of July 2016"
-output: html_document
+output: 
+  html_document: 
+    keep_md: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -137,10 +139,10 @@ ctrl <- trainControl(classProbs=TRUE,
 
 # train model
 system.time(model_rf <- train(classe ~ ., data = training, method = "rf"))
-saveRDS(model_rf, "model_rf.R")
+saveRDS(model_rf, "model_rf.rds")
 
 # save model for re-run
-model_rf <- readRDS("model_rf.R")
+model_rf <- readRDS("model_rf.rds")
 
 # stop parallel computing
 stopCluster(cl)
@@ -148,7 +150,7 @@ stopCluster(cl)
 } else {
   
 # use saved model from previuos calculation 
-model_rf <- readRDS("model_rf.R")
+model_rf <- readRDS("model_rf.rds")
 
 }
 
