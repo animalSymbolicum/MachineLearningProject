@@ -1,0 +1,191 @@
+---
+title: "Predicting the Quality of Barbell Lifts with Accelerometers"
+author: "Majid"
+date: "3rd of July 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways (see list beneath). 
+More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The barbell lifts are defined as following:
+-Class 'A': Unilateral Dumbbell Biceps Curl exactly according to the specification 
+-Class 'B': Throwing the elbows to the front
+-Class 'C': Lifting the dumbbell only halfway
+-Class 'D': Lowering the dumbbell only halfway
+-Class 'E': Throwing the hips to the front
+
+The purpose of this report is to build a model and predict the different executions 
+of bareball lifts accurately. 
+
+## Setup
+
+We load the following packages and provide the version of the 'caret' package. 
+
+```{r library_setup, warning=FALSE, message = FALSE}
+# load packages
+library(caret)
+library(ggplot2)
+library(parallel)
+library(doParallel)
+
+# define central seed
+centralSeed <- 72353
+
+# switch use saved model or recalculate model
+calulateModel <- FALSE
+
+# provide version information for caret package
+packageVersion("caret")
+```
+
+## Getting & Cleaning Data
+
+We first download the data from the following URLs into the R session (the orignal
+contributor if the data can be found [here](http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset) ).
+
+```{r loading_data, cache = TRUE}
+# URLs
+urlTraining   <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urlValidation <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# load data & code 'NA', '' and '#DIV/0!' as missing values
+trainData <- read.csv(url(urlTraining), header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+validData <- read.csv(url(urlValidation), header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+```
+
+The cleaning process is applied to training as well as validation data. First 
+we subset variables without exploratory content (as name, timestamp...). Then we
+extract variables without any missing values (NAs). Further more we transform column
+class to numeric except for the prediction variables. We than exclude highly correlated 
+variables (with the cut-off 0.9) and check if any variables have zero variance. 
+We than center and scale the data with the PreProcess() function. Finally we 
+partition the data in a training and test set.
+
+```{r cleaning_data, cache = TRUE}
+# subset irrelevant columns
+trainData <- trainData[, -c(1:7)]
+validData <- validData[, -c(1:7)]
+
+# identify variables not containing any NA values
+notMissingFilter <- apply(trainData, 2, function(column) !any(is.na(column)))
+
+# subset variables without any NAs
+trainData <- trainData[, notMissingFilter]
+validData <- validData[, notMissingFilter]
+
+# transform variable class to numeric except for 'classe' & 'problem_id'
+numericIndex <- 1:(ncol(trainData)-1)
+trainData[, numericIndex] <- apply(trainData[, numericIndex], 2, as.numeric)
+validData[, numericIndex] <- apply(validData[, numericIndex], 2, as.numeric)
+
+# identify highly correlated variables to 
+highlyCorrelatedIndex <- findCorrelation(cor(trainData[, numericIndex]), cutoff = 0.9)
+
+# exclude highly correlated variables from data
+trainData <- trainData[, -highlyCorrelatedIndex]
+validData <- validData[, -highlyCorrelatedIndex]
+
+# chech for zero variance variables
+zeroVarianceIndex <- nearZeroVar(trainData)
+ifelse(length(zeroVarianceIndex) == 0, "No zero variance variables", stop("Found zero variables to subsett"))
+
+# preprocess variables 
+tempPrepTrain <- preProcess(trainData[, -46],method=c('knnImpute', 'center', 'scale'))
+predictedTrain <- predict(tempPrepTrain, trainData[, -46])
+predictedTrain$classe <- trainData$classe
+
+tempPrepValid <- preProcess(validData[, -46],method=c('knnImpute', 'center', 'scale'))
+predictedValid <- predict(tempPrepValid, validData[, -46])
+predictedValid$problem_id <- validData$problem_id
+
+# set seed and partition trainData in test and training set
+set.seed(centralSeed)
+inTrain <- createDataPartition(y = predictedTrain$classe, p = 0.6, list = FALSE)
+training <- trainData[inTrain,] #predictedTrain #!!!
+testing  <- trainData[-inTrain,]
+```
+
+## Building a Random Forest Model
+
+We will now build our final model using random forest algorithm. To speed up the
+calulation we us parallel computing. We print the model with its most important 
+variables. Also a plot is rendered showing the relation between the number of major
+predictors and accuracy.
+
+```{r random_forest_model, cache = TRUE}
+
+# if model should be calculated 
+if (calulateModel) {
+  
+# get available cores
+cl <- makeCluster(detectCores() - 1)
+
+# register clusters
+registerDoParallel(cl)
+
+# set parallel options for train function
+ctrl <- trainControl(classProbs=TRUE,
+                     savePredictions=TRUE,
+                     allowParallel=TRUE)
+
+# train model
+system.time(model_rf <- train(classe ~ ., data = training, method = "rf"))
+saveRDS(model_rf, "model_rf.R")
+
+# save model for re-run
+model_rf <- readRDS("model_rf.R")
+
+# stop parallel computing
+stopCluster(cl)
+  
+} else {
+  
+# use saved model from previuos calculation 
+model_rf <- readRDS("model_rf.R")
+
+}
+
+# print most important variables
+varImp(model_rf)
+
+# plot predictors and accuracy
+plot(model_rf)
+
+```
+
+## Predict Testing Set
+
+We now predict the test set and inspect the accuracy of the model:
+
+```{r predict_testing_set, message = FALSE}
+pred_rf  <- predict(model_rf, testing)
+predConfMatrix <- confusionMatrix(pred_rf, testing[, 46])
+predConfMatrix
+```
+
+Finally our model has an overall accuracy of **`r round(predConfMatrix[[3]]["Accuracy"] * 100, 2)`**.
+
+## Predict Validation 
+
+The prediction for the validation set are the following classes:
+
+```{r predict_validation_data}
+data.frame(
+  validData$problem_id, 
+  classe = predict(model_rf, validData)
+)
+```
+
+## Conclusion
+
+With an overall acuracy of `r round(predConfMatrix[[3]]["Accuracy"] * 100, 2)` we found a good solution to predict the quality 
+of barbell lifts depending on this data.
+
+
